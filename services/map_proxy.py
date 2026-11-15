@@ -27,6 +27,15 @@ MAPTILER_KEY = key("MAPTILER_KEY")
 OWM_KEY = key("OWM_KEY")
 TOMTOM_KEY = key("TOMTOM_KEY")
 
+def _maptiler_style_url(theme):
+    # Public catalog styles work with the user's own MapTiler account. The
+    # previous UUIDs referred to private styles from a different account (404).
+    light = theme == "light"
+    style = key("MAPTILER_STYLE_LIGHT" if light else "MAPTILER_STYLE_DARK",
+                "streets-v2" if light else "dataviz-dark")
+    return ("https://api.maptiler.com/maps/" + urllib.parse.quote(style, safe="")
+            + "/style.json?" + urllib.parse.urlencode({"key": MAPTILER_KEY}))
+
 # ═══ RETE VELOCE: sessione condivisa + cache (RAM + disco) ═══════════════
 # Before, EVERY request (vector tile, font glyphs, sprite, style) opened
 # a new TLS connection to Mapbox/MapTiler/Google and saved nothing:
@@ -514,15 +523,17 @@ def get_style():
         response.headers['Cache-Control'] = 'no-store'
         return response
 
-    if s == "light":
-        url = "https://api.maptiler.com/maps/01a059f2-13fd-7093-8f14-673805645690/style.json?key=" + MAPTILER_KEY
-    else:
-        url = "https://api.maptiler.com/maps/01a06434-8dc2-7506-b480-5e73d816c10d/style.json?key=" + MAPTILER_KEY
+    url = _maptiler_style_url(s)
 
     base, _st = _fetch_cached('style', _md5(url), url, ttl=1800)
     if base is None:
-        return jsonify({"error": "map style unreachable"}), 502
-    data = json.loads(base)
+        return jsonify({"error": "map style unreachable", "upstream_status": _st}), 502
+    try:
+        data = json.loads(base)
+        if not isinstance(data, dict) or not isinstance(data.get("layers"), list):
+            raise ValueError("not a map style")
+    except (ValueError, TypeError):
+        return jsonify({"error": "invalid map style"}), 502
 
     # Relief (raster-dem / hillshade): Qt MapLibre does not decode the tiles ("Unsupported
     # image type"), nothing shows on screen. Removed: no useless requests and errors.
@@ -1003,9 +1014,8 @@ def _poi_tile_source():
     if _POI_SRC["v"] and now - _POI_SRC["t"] < 3600:
         return _POI_SRC["v"]
     found = None
-    for sid in ("1", "2"):
-        url = ("https://api.maptiler.com/maps/01a06434-8dc2-7506-b480-5e73d816c10d/style.json?key=" + MAPTILER_KEY) if sid == "1" else \
-              ("https://api.maptiler.com/maps/01a059f2-13fd-7093-8f14-673805645690/style.json?key=" + MAPTILER_KEY)
+    for theme in ("dark", "light"):
+        url = _maptiler_style_url(theme)
         raw, _st = _fetch_cached('style', _md5(url), url, ttl=1800)
         if not raw: continue
         try: data = json.loads(raw)

@@ -541,11 +541,15 @@ int main(int argc, char *argv[])
     static FileHelper fileHelper;
     engine.rootContext()->setContextProperty("Files", &fileHelper);
 
-    // MapLibre QML plugin: first the one included in third_party/maplibre (precompiled),
-    // otherwise the one installed on the system in /usr/local/qml.
+    // Prefer a locally rebuilt plugin when the bundled Qt/ICU ABI differs from
+    // the distribution. Only advertise a plugin after its libraries loaded.
     {
-        const QString ml = projectDir() + "/third_party/maplibre";
-        if (QFileInfo::exists(ml + "/qml/MapLibre/qmldir")) {
+        QStringList candidates;
+        const QString overrideDir = qEnvironmentVariable("VOLTA_MAPLIBRE_DIR");
+        if (!overrideDir.isEmpty()) candidates << overrideDir;
+        candidates << projectDir() + "/.runtime/maplibre" << projectDir() + "/third_party/maplibre";
+        for (const QString &ml : candidates) {
+            if (!QFileInfo::exists(ml + "/plugins/geoservices")) continue;
             // the libraries must be loaded first, with the full path
             // The plugin's libraries have no search path of their own: their dependencies (Qt SQL from the
             // AppImage, ICU 76 next to them) must already be loaded, otherwise on a system without Qt
@@ -557,14 +561,21 @@ int main(int argc, char *argv[])
                                        ml + "/lib/libicui18n.so.76"}) {
                 if (QFileInfo::exists(dep)) QLibrary(dep).load();
             }
+            bool loaded = true;
             for (const char *lib : {"libQMapLibre.so.4", "libQMapLibreQuickPrivate.so.4", "libQMapLibreLocation.so.4"}) {
                 QLibrary l(ml + "/lib/" + lib);
                 l.setLoadHints(QLibrary::ExportExternalSymbolsHint);
-                if (!l.load()) qWarning().noquote() << "[maplibre] library not loaded:" << l.errorString();
+                if (!l.load()) {
+                    loaded = false;
+                    qWarning().noquote() << "[maplibre] library not loaded:" << l.errorString();
+                    break;
+                }
             }
+            if (!loaded) continue;
             QCoreApplication::addLibraryPath(ml + "/plugins");
             engine.addImportPath(ml + "/qml");
-            qDebug().noquote() << "[maplibre] using the bundled version:" << ml;
+            qInfo().noquote() << "[maplibre] using compatible plugin:" << ml;
+            break;
         }
         engine.addImportPath("/usr/local/qml");
     }

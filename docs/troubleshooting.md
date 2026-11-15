@@ -12,6 +12,15 @@
 
 - **Blank or gray map**: check `MAPBOX_TOKEN` and `MAPTILER_KEY` in the
   [guided setup](settings/system.md#connected-services). You need internet and a valid key.
+- **Address visible, but no map**: reverse geocoding and rendering are separate. Check
+  `[maplibre]` startup messages for missing libraries or a Qt version mismatch. A plugin
+  rebuilt for the distribution can be placed in `.runtime/maplibre/` (with `lib/`,
+  `plugins/geoservices/` and `qml/`) or selected with `VOLTA_MAPLIBRE_DIR=/path/to/install`.
+  The bundled plugin targets Qt 6.11.1 / ICU 76; Ubuntu 26.04 ships Qt 6.10.2 / ICU 78.
+- **`/style.json` returns 502**: its JSON response includes `upstream_status` when the
+  provider rejects a request. A 404 may mean the style belongs to another account.
+  The defaults use MapTiler's public `streets-v2` and `dataviz-dark` styles. To use your
+  own custom styles, set `MAPTILER_STYLE_LIGHT` and `MAPTILER_STYLE_DARK` in `keys.env`.
 - **Blurry satellite**: tiles not yet downloaded keep the previous resolution; they complete
   as soon as the network is back.
 - **Search finds nothing**: it needs `TOMTOM_KEY`. Fuel prices only work in Italy.
