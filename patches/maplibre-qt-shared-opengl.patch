@@ -1,0 +1,78 @@
+diff --git a/src/quick/texture_node_opengl.cpp b/src/quick/texture_node_opengl.cpp
+index b8d28cf..76a576b 100644
+--- a/src/quick/texture_node_opengl.cpp
++++ b/src/quick/texture_node_opengl.cpp
+@@ -8,6 +8,7 @@
+ #include <QtGui/QOpenGLContext>
+ #include <QtGui/QOpenGLFunctions>
+ #include <QtQuick/QQuickOpenGLUtils>
++#include <QDebug>
+ 
+ namespace {
+ constexpr int DefaultSize = 64;
+@@ -47,41 +48,40 @@ void TextureNodeOpenGL::render(QQuickWindow *window) {
+         return;
+     }
+ 
+-    // Ensure renderer is created first
++    // Qt Quick 3D / video and MapLibre share this context. Bracket all
++    // external GL work, not just render(), and detach Qt's pixel buffers:
++    // nullptr in glTexImage2D means offset zero when an unpack PBO is bound.
++    QOpenGLFunctions *gl = glContext->functions();
++    GLint prevFbo{}, prevUnpack{}, prevPack{};
++    gl->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
++    gl->glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &prevUnpack);
++    gl->glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prevPack);
++    window->beginExternalCommands();
++    QQuickOpenGLUtils::resetOpenGLState();
++    gl->glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
++    gl->glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
++    for (int i = 0; i < 16; ++i) {
++        const GLenum error = gl->glGetError();
++        if (error == GL_NO_ERROR) break;
++        if (qEnvironmentVariableIsSet("VOLTA_DEBUG"))
++            qWarning() << "[map-context] inherited GL error" << Qt::hex << error;
++    }
++
+     if (!m_rendererBound) {
+         m_map->createRenderer(nullptr);
+         m_rendererBound = true;
+     }
+-
+-    // Update map size if needed - pass logical size, mbgl::Map handles DPI internally
+     m_map->resize(m_size, m_pixelRatio);
+-
+-    // CRITICAL: Set up framebuffer for texture sharing before rendering
+-    QOpenGLFunctions *gl = glContext->functions();
+-    if (m_fbo == 0) {
+-        gl->glGenFramebuffers(1, &m_fbo);
+-    }
+-
+-    // Update the size
++    if (m_fbo == 0) gl->glGenFramebuffers(1, &m_fbo);
+     m_map->updateRenderer(m_size, m_pixelRatio, m_fbo);
+-
+-    // Save and restore OpenGL state to prevent conflicts
+-    GLint prevFbo{};
+-    gl->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+-
+-    // Begin external commands before MapLibre render
+-    window->beginExternalCommands();
+-
+     m_map->render();
+-
+-    // Ensure we flush the OpenGL commands
+     gl->glFlush();
+ 
+-    // End external commands after MapLibre render
+-    window->endExternalCommands();
+-
+-    // Restore previous framebuffer
++    QQuickOpenGLUtils::resetOpenGLState();
+     gl->glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
++    gl->glBindBuffer(GL_PIXEL_UNPACK_BUFFER, prevUnpack);
++    gl->glBindBuffer(GL_PIXEL_PACK_BUFFER, prevPack);
++    window->endExternalCommands();
+ 
+     // Try to get MapLibre's OpenGL framebuffer texture ID for zero-copy sharing
+     const GLuint maplibreTextureId = m_map->getFramebufferTextureId();

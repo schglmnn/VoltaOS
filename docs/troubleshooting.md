@@ -10,6 +10,16 @@
 
 ## Map
 
+- **Abort with `std::bad_alloc` while the map starts**: this can be a shared OpenGL
+  state error rather than exhausted RAM. On Ubuntu 26.04 / Intel Iris Xe, the
+  reproduced backtrace was `mbgl::gl::UploadPass::createIndexBufferResource`, with
+  `GL_INVALID_OPERATION` for a 180-byte buffer. Apply
+  `patches/maplibre-qt-shared-opengl.patch` to the MapLibre Qt source, rebuild and
+  reinstall its plugin. The patch brackets all external GL work, resets shared
+  state, detaches/restores pixel buffers and clears inherited errors at the
+  renderer boundary. Real errors produced by MapLibre uploads are still checked.
+  The offline regression in `tests/map_gl` deliberately pollutes the GL context
+  and verifies that a GeoJSON polygon renders.
 - **Blank or gray map**: check `MAPBOX_TOKEN` and `MAPTILER_KEY` in the
   [guided setup](settings/system.md#connected-services). You need internet and a valid key.
 - **Address visible, but no map**: reverse geocoding and rendering are separate. Check

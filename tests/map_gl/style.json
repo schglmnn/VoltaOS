@@ -1,0 +1,13 @@
+{
+  "version": 8,
+  "sources": {
+    "test": {
+      "type": "geojson",
+      "data": {"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", "coordinates": [[[-4,-4],[4,-4],[4,4],[-4,4],[-4,-4]]]}}
+    }
+  },
+  "layers": [
+    {"id":"background", "type":"background", "paint":{"background-color":"#ffffff"}},
+    {"id":"test-fill", "type":"fill", "source":"test", "paint":{"fill-color":"#ff0000"}}
+  ]
+}
