@@ -63,6 +63,7 @@ a single **queue** and a single **search**. To add a source you need: a service 
 | `VOLTA_OPEN=app[:page]` | opens an app after startup (e.g. `settings:Display`, `localmusic`) |
 | `VOLTA_SHOT=file.png[:ms]` | saves a screenshot after *ms* milliseconds |
 | `VOLTA_CARLINK_AUTO=1` | enables the CarPlay / Android Auto dongle at startup |
+| `VOLTA_GPS_SIMULATE=lat,lon` | stationary simulated GPS fix for this process; bypasses receiver probing, reports zero speed and satellites, and labels the source as simulated. Unset and restart for real GPS. Does not change the phone's location in CarPlay. |
 
 Quick test after QML changes, without a screen: `QT_QPA_PLATFORM=offscreen ./build/Release/VoltaOS` and
 look in the log for `TypeError`, `ReferenceError`, `Non-existent`, `failed to load` and the `FIRST FRAME` line.

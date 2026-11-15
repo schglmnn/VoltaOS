@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <cmath>
 
 // UBX CFG-RATE: measure every 100 ms (10 Hz). Checksum already computed.
 static const unsigned char UBX_10HZ[] = {0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0x64, 0x00,
@@ -31,6 +32,26 @@ GpsService::GpsService(QObject *parent) : QObject(parent)
     connect(m_tick, &QTimer::timeout, this, &GpsService::broadcast);
     m_tick->start();
     m_btSelected = QSettings().value("gps/btMac").toString();
+    // Explicit, process-local stationary test position. Never persist it as a
+    // real GPS fix or write to a connected receiver.
+    const QString sim = qEnvironmentVariable("VOLTA_GPS_SIMULATE");
+    if (!sim.isEmpty()) {
+        const QStringList coordinates = sim.split(',');
+        bool latOk = false, lonOk = false;
+        const double lat = coordinates.value(0).toDouble(&latOk);
+        const double lon = coordinates.value(1).toDouble(&lonOk);
+        if (coordinates.size() == 2 && latOk && lonOk && std::isfinite(lat) && std::isfinite(lon)
+            && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+            m_simulated = true;
+            m_lat = lat;
+            m_lon = lon;
+            m_fix = true;
+            m_source = tr("Simulated GPS (stationary)");
+            qInfo() << "[GPS] stationary simulation enabled:" << lat << lon;
+            return;
+        }
+        qWarning() << "[GPS] invalid VOLTA_GPS_SIMULATE; expected latitude,longitude within valid ranges";
+    }
     QTimer::singleShot(0, this, &GpsService::tryOpen);
 }
 
@@ -91,7 +112,7 @@ void GpsService::setBaud(int fd, int baud)
 
 void GpsService::tryOpen()
 {
-    if (m_fd >= 0 || m_btFd >= 0) return;
+    if (m_simulated || m_fd >= 0 || m_btFd >= 0) return;
     // 1) Bluetooth scelto a mano dall'utente
     if (!m_btSelected.isEmpty() && !m_btMode && m_btQueue.isEmpty() && !m_btListed) {
         m_btListed = true;
@@ -413,5 +434,6 @@ void GpsService::broadcast()
     d.insert(QStringLiteral("altitude"), m_altitude);
     d.insert(QStringLiteral("sats"), m_sats);
     d.insert(QStringLiteral("fix"), true);
+    d.insert(QStringLiteral("simulated"), m_simulated);
     emit updated(d);
 }

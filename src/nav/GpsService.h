@@ -27,7 +27,7 @@ public:
     explicit GpsService(QObject *parent = nullptr);
     ~GpsService() override;
 
-    bool connected() const { return m_fd >= 0; }
+    bool connected() const { return m_simulated || m_fd >= 0; }
     QString port() const { return m_port; }
     QString source() const { return m_source; }
     QVariantList btDevices() const { return m_btDevices; }
@@ -89,4 +89,5 @@ private:
     double m_accuracy = 0, m_altitude = 0;
     int m_sats = 0;
     bool m_fix = false;
+    bool m_simulated = false;
 };
