@@ -52,3 +52,12 @@ to the other music apps. See [YT Music](ytmusic.md) and [Interface](../interface
   Complete the receiver login above. Playback targets the local `spotifyd` receiver;
   it does not fall back to an unrelated active phone or speaker.
 - If the library does not load, sign in again and check the Spotify app's Redirect URIs.
+
+## Location-based discovery
+
+With a valid GPS fix, Home charts, new releases and Explore searches follow the
+country returned by the map service's existing MapTiler reverse geocoder. Location
+lookups are limited to once per minute. Personal favourites and account settings
+are unchanged. Without a valid fix or a successful lookup, the last country is
+retained in local settings; the initial fallback is Germany. Simulated GPS fixes
+use the same path. This changes discovery queries, not Spotify account territory.

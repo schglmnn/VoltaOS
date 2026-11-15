@@ -793,7 +793,7 @@ def search():
             for a in raw.get("artists", {}).get("items", []):
                 ar.append({
                     "id": a["id"], "title": a["name"],
-                    "subtitle": "Artista",
+                    "subtitle": "Artist",
                     "cover": get_official_img(a.get("images")),
                     "type": "Artist"
                 })
@@ -830,7 +830,7 @@ def search():
             for a in getattr(res, "artists", []):
                 ar.append({
                     "id": getattr(a, "id", ""), "title": getattr(a, "name", ""),
-                    "subtitle": "Artista", "cover": get_img(a), "type": "Artist"
+                    "subtitle": "Artist", "cover": get_img(a), "type": "Artist"
                 })
             for p in getattr(res, "playlists", []):
                 pl.append({
@@ -846,6 +846,13 @@ def search():
 # ── ENDPOINT UI HOME ──
 @app.route("/ui/home")
 def home():
+    country = request.args.get("country", "DE").upper()
+    country = country if len(country) == 2 and country.isascii() and country.isalpha() else "DE"
+    names = {"DE": "Germany", "AT": "Austria", "CH": "Switzerland", "IT": "Italy",
+             "FR": "France", "ES": "Spain", "GB": "United Kingdom", "US": "USA",
+             "NL": "Netherlands", "PL": "Poland", "CZ": "Czech Republic",
+             "BE": "Belgium", "DK": "Denmark", "SE": "Sweden", "PT": "Portugal"}
+    region = names.get(country, country)
     shelves = []
     quick_picks = []
     global _recents
@@ -892,12 +899,12 @@ def home():
                 ar_items = [{
                     "id": ar['id'],
                     "title": ar['name'],
-                    "subtitle": "Artista",
+                    "subtitle": "Artist",
                     "cover": get_official_img(ar.get('images')),
                     "type": "Artist"
                 } for ar in top_ar if ar and ar.get('id')]
                 if ar_items:
-                    shelves.append({"title": "I tuoi artisti preferiti", "items": ar_items, "isCircle": True})
+                    shelves.append({"title": "Your favourite artists", "items": ar_items, "isCircle": True})
         except Exception as e:
             print("Artists error:", e)
 
@@ -907,7 +914,7 @@ def home():
     # 5. CLASSIFICHE E TENDENZE ITALIANE (Scraper)
     if sp_scraper:
         try:
-            res_trend = sp_scraper.search("Top 50 Italia")
+            res_trend = sp_scraper.search("Top 50 " + region)
             pl_items = [{
                 "id": getattr(p, "id", ""),
                 "title": getattr(p, "name", ""),
@@ -916,13 +923,13 @@ def home():
                 "type": "Playlist"
             } for p in getattr(res_trend, "playlists", [])[:15] if getattr(p, "id", None)]
             if pl_items:
-                shelves.append({"title": "Classifiche e Tendenze", "items": pl_items, "isCircle": False})
+                shelves.append({"title": "Charts · " + region, "items": pl_items, "isCircle": False})
         except Exception as e:
             print("Trends error:", e)
 
         # 6. ESPLORA MOOD/GENERI (Scraper)
         try:
-            moods = ["Pop Italiano", "Indie Italia", "Viaggio in auto", "Energia", "Chill", "Rap Italiano"]
+            moods = ["Pop " + region, "Indie " + region, "Road trip", "Energy", "Chill", "Hip Hop " + region]
             mood = _random.choice(moods)
             res_mood = sp_scraper.search(f"Playlist {mood}")
             mood_items = [{
@@ -933,13 +940,13 @@ def home():
                 "type": "Playlist"
             } for p in getattr(res_mood, "playlists", [])[:15] if getattr(p, "id", None)]
             if mood_items:
-                shelves.append({"title": f"Esplora: {mood}", "items": mood_items, "isCircle": False})
+                shelves.append({"title": f"Explore: {mood}", "items": mood_items, "isCircle": False})
         except Exception as e:
             print("Mood error:", e)
 
         # 7. ALBUM DEL MOMENTO (Scraper)
         try:
-            res_al = sp_scraper.search("Nuove Uscite")
+            res_al = sp_scraper.search("New releases " + region)
             al_items = [{
                 "id": getattr(a, "id", ""),
                 "title": getattr(a, "name", ""),
@@ -1000,7 +1007,7 @@ def library():
             elif filter_type == "artists":
                 items = [{
                     "id": getattr(ar, "id", ""), "title": getattr(ar, "name", ""),
-                    "subtitle": "Artista", "cover": get_img(ar), "type": "Artist"
+                    "subtitle": "Artist", "cover": get_img(ar), "type": "Artist"
                 } for ar in getattr(res, "artists", [])[:15]]
         except Exception:
             pass
@@ -1341,11 +1348,12 @@ def ui_category_covers():
         if not name: continue
         q = parts[1].strip() if len(parts) > 1 and parts[1].strip() else name
         kind = "albums" if len(parts) > 2 and parts[2] == "albums" else "playlists"
-        e = _cat_cover.get(name)
+        cache_name = name + "~" + q + "~" + kind
+        e = _cat_cover.get(cache_name)
         if e and e.get("url"): out[name] = e["url"]
         if not e or now - e.get("t", 0) > _CAT_COVER_TTL:
             with _cat_lock:
-                if not any(j[0] == name for j in _cat_queue): _cat_queue.append((name, q, kind))
+                if not any(j[0] == cache_name for j in _cat_queue): _cat_queue.append((cache_name, q, kind))
     with _cat_lock:
         if _cat_queue and not _cat_worker_on:
             _cat_worker_on = True

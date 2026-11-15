@@ -23,6 +23,41 @@ Rectangle {
 
     property string backendUrl: "http://127.0.0.1:8098"
 
+    Core.Settings { id: regionSettings; category: "SpotifyRegion"; property string country: "DE"; property string countryName: "Germany" }
+    property string spotifyCountry: regionSettings.country
+    property string spotifyRegion: regionSettings.countryName
+    property double _regionLookupAt: 0
+    property bool _regionLookupBusy: false
+    Connections {
+        target: Gps
+        function onUpdated(d) {
+            if (!d.fix || !isFinite(d.lat) || !isFinite(d.lon) || root._regionLookupBusy
+                    || Date.now() - root._regionLookupAt < 60000) return
+            root._regionLookupAt = Date.now()
+            root._regionLookupBusy = true
+            var xhr = new XMLHttpRequest()
+            xhr.open("GET", "http://127.0.0.1:9098/reverse-geocode?lat=" + d.lat + "&lon=" + d.lon)
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState !== XMLHttpRequest.DONE) return
+                root._regionLookupBusy = false
+                if (xhr.status !== 200) return
+                try {
+                    var r = JSON.parse(xhr.responseText)
+                    if (!/^[A-Z]{2}$/.test(r.country_code)) return
+                    if (r.country_code === root.spotifyCountry) return
+                    regionSettings.country = r.country_code
+                    regionSettings.countryName = r.country_name || r.country_code
+                    root.spotifyCountry = regionSettings.country
+                    root.spotifyRegion = regionSettings.countryName
+                    root.exploreCovers = ({})
+                    root.loadHome(true)
+                    root.refreshExploreCovers()
+                } catch (e) {}
+            }
+            xhr.send()
+        }
+    }
+
     // Header ingrandito
     readonly property real u: (Window.window && Window.window.uPx) ? Window.window.uPx : 1.12
     readonly property real headerH: 38 * ((Window.window && Window.window.uPx) ? Window.window.uPx : 1.12)   // header band: 38 wireframe px (entries centered in the first 32, 6 of margin below)
@@ -146,22 +181,22 @@ Rectangle {
     property bool exploreLoading: false
     readonly property var exploreCats: [
         { name: qsTr("Made for you"),  color: "#E8103C", q: "Daily Mix" },
-        { name: qsTr("New releases"),   color: "#E01BA8", q: "Nuove Uscite", albums: true },
-        { name: "Sanremo",        color: "#E01BA8", q: "Sanremo" },
-        { name: "Pop",            color: "#12860F", q: "Pop Italiano" },
-        { name: "Hip Hop",        color: "#E01BA8", q: "Rap Italiano" },
-        { name: qsTr("Dance / Electronic"), color: "#1E88E5", q: "Dance Elettronica" },
-        { name: qsTr("Charts"),    color: "#E4491F", q: "Top 50 Italia" },
+        { name: qsTr("New releases"),   color: "#E01BA8", q: "New releases " + root.spotifyRegion, albums: true },
+        { name: qsTr("Local hits"), color: "#E01BA8", q: "Hits " + root.spotifyRegion },
+        { name: "Pop",            color: "#12860F", q: "Pop " + root.spotifyRegion },
+        { name: "Hip Hop",        color: "#E01BA8", q: "Hip Hop " + root.spotifyRegion },
+        { name: qsTr("Dance / Electronic"), color: "#1E88E5", q: "Dance Electronic" },
+        { name: qsTr("Charts"),    color: "#E4491F", q: "Top 50 " + root.spotifyRegion },
         { name: "Latina",         color: "#E4491F", q: "Latina" },
         { name: "Rock",           color: "#E8103C", q: "Rock" },
-        { name: "Indie",          color: "#E8103C", q: "Indie Italia" },
+        { name: "Indie",          color: "#E8103C", q: "Indie " + root.spotifyRegion },
         { name: "Mood",           color: "#E01BA8", q: "Mood" },
-        { name: qsTr("Discover"),         color: "#E4491F", q: "Scopri" },
-        { name: qsTr("In the car"),        color: "#E01BA8", q: "Viaggio in auto" },
-        { name: qsTr("Trending"),    color: "#E4491F", q: "Tendenze" },
+        { name: qsTr("Discover"),         color: "#E4491F", q: "Discover " + root.spotifyRegion },
+        { name: qsTr("In the car"),        color: "#E01BA8", q: "Road trip" },
+        { name: qsTr("Trending"),    color: "#E4491F", q: "Trending " + root.spotifyRegion },
         { name: "EQUAL",          color: "#0B8A55", q: "EQUAL" },
         { name: "RADAR",          color: "#7A7A7A", q: "RADAR" },
-        { name: qsTr("Workout music"), color: "#3F8CCB", q: "Allenamento" },
+        { name: qsTr("Workout music"), color: "#3F8CCB", q: "Workout" },
         { name: "Party",          color: "#3F8CCB", q: "Party" },
         { name: "Gaming",         color: "#E01BA8", q: "Gaming" },
         { name: "R&B",            color: "#E01BA8", q: "R&B" },
@@ -169,8 +204,8 @@ Rectangle {
         { name: "Funk",           color: "#B02897", q: "Funk" },
         { name: "Spotify Singles", color: "#777777", q: "Spotify Singles" },
         { name: "GLOW",           color: "#0D73EC", q: "GLOW" },
-        { name: qsTr("Wellness"),      color: "#148A08", q: "Benessere" },
-        { name: qsTr("Kids & family"), color: "#0D73EC", q: "Bambini e famiglia" }
+        { name: qsTr("Wellness"),      color: "#148A08", q: "Wellness" },
+        { name: qsTr("Kids & family"), color: "#0D73EC", q: "Kids family" }
     ]
     // Opens a category. If the service does not answer or the list is empty, it retries by itself (up to 5 times, every 4 s).
     property int _exTries: 0
@@ -287,7 +322,7 @@ Rectangle {
         var xhr = new XMLHttpRequest()
         var sep = path.indexOf("?") !== -1 ? "&" : "?"
         var rnd = Math.floor(Math.random() * 999999)
-        var url = root.backendUrl + path + sep + "_t=" + Date.now() + "_" + rnd
+        var url = root.backendUrl + path + sep + "country=" + encodeURIComponent(root.spotifyCountry) + "&_t=" + Date.now() + "_" + rnd
         xhr.open("GET", url)
         xhr.onreadystatechange = function() {
             if (xhr.readyState === XMLHttpRequest.DONE) {

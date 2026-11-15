@@ -1716,7 +1716,16 @@ def reverse_geocode():
             if not city and len(parts) >= 2:
                 city = parts[-2] if len(parts) >= 3 else parts[-1]
 
-        result = {"street": street, "city": city}
+        country = ""
+        country_name = ""
+        if features:
+            for item in [features[0]] + features[0].get("context", []):
+                if item.get("id", "").startswith("country"):
+                    country = (item.get("country_code") or item.get("short_code") or item.get("properties", {}).get("short_code") or "").upper()
+                    country_name = item.get("text", "")
+                    break
+        result = {"street": street, "city": city, "country_code": country,
+                  "country_name": country_name}
         if len(_geocode_cache) > 300:          # before it grew for the whole trip
             for k in [k for k, v in _geocode_cache.items() if now - v[0] >= _GEOCODE_CACHE_TTL]:
                 _geocode_cache.pop(k, None)
