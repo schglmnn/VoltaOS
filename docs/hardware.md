@@ -29,6 +29,11 @@ messages**. It gives you: calls, contacts, SMS and music from the phone. See [Ph
 A **Carlinkit** dongle in a USB port: the phone connects to the dongle over Bluetooth and the video
 reaches the UI. See [CarPlay / Android Auto](app/carplay-androidauto.md).
 
+The **CPC200-CMAP** (`1314:1520`, tested firmware `2020.08.07.1519CCY`) is supported for
+wired iPhone CarPlay: connect the phone to the dongle using a USB data cable. Install the
+included `packaging/51-volta-carlinkit.rules` once and reconnect the adapter. Wireless
+pairing requires a wireless-capable dongle; it is not required for the wired CMAP test.
+
 ## Audio
 
 Output and input are chosen in [Settings › Audio](settings/audio.md) (PipeWire/PulseAudio).

@@ -8,10 +8,36 @@ in [Hardware](../hardware.md#carplay--android-auto-dongle).
 
 ## How to connect
 
-1. Plug the dongle into a USB port of the PC.
-2. Turn on **Bluetooth** on the phone and connect it to the dongle (it appears as a Bluetooth device on the
-   phone). CarPlay or Android Auto start by themselves.
-3. Open the **CarPlay / Android Auto** app from the drawer.
+1. Install USB permissions once (the source installer does this automatically):
+   ```bash
+   sudo install -m 644 packaging/51-volta-carlinkit.rules /etc/udev/rules.d/
+   sudo udevadm control --reload-rules
+   ```
+   Unplug and reconnect the dongle afterwards. This grants access to the active local desktop
+   user for Carlinkit USB IDs `1314:1520` and `1314:1521`; do not run Volta OS as root.
+2. Plug the dongle into a USB port of the PC and choose **Dongle** as the connection source.
+3. For a **CPC200-CMAP**, connect the iPhone with a USB data cable to the dongle's phone port and
+   accept CarPlay on the iPhone. Wireless-capable adapters can instead pair over Bluetooth.
+4. Open the **CarPlay / Android Auto** app from the drawer.
+
+### CPC200-CMAP (wired CarPlay)
+
+Tested on Ubuntu 26.04 with a CPC200-CMAP reporting USB `1314:1520`, firmware
+`2020.08.07.1519CCY`, bulk IN `0x81` and bulk OUT `0x01`. The adapter uses the existing
+AutoKit packet protocol; no firmware update is needed. An iPhone connected through the
+adapter was confirmed working. Other firmware and Android Auto on this specific model
+have not been verified.
+
+If **USB access denied** appears, install the rule above and reconnect. If the adapter is
+busy, close other CarPlay/AutoKit applications. The terminal log includes `[Carlink]` USB
+identity, endpoints, firmware, display handshake, phone connection and first-video-frame messages.
+
+If the host is restarted while the iPhone is still connected, the adapter may resume video
+without another phone-connected notification. Volta OS requests a fresh keyframe whenever
+incoming video lacks decoder parameters, and repeats the request every two seconds until
+decoding starts. It also resynchronizes after decoding errors. Dependent slices are
+held back until the parameter sets and a keyframe are available, avoiding a repeated
+FFmpeg `non-existing PPS` / `no frame` loop during startup.
 
 The states you see: *Starting the dongle…* → *Connect your phone* → *Connecting to …* → the phone's video.
 If the dongle is not connected, *Dongle not available · Plug in the USB dongle* appears.

@@ -29,6 +29,11 @@ fi
 sudo apt update
 sudo apt install -y $PKGS
 
+say "USB access for Carlinkit / Android Auto"
+sudo install -m 644 packaging/51-volta-carlinkit.rules packaging/51-volta-android-auto.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+echo "Reconnect any attached Carlinkit dongle or Android phone to apply USB permissions."
+
 say "2/4  Python libraries"
 pip install --user --break-system-packages -r requirements.txt \
     || pip install --user -r requirements.txt

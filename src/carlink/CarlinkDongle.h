@@ -1,5 +1,6 @@
 #pragma once
-// CarPlay and Android Auto through the Carlinkit dongle (USB 1314:1520 / 1521).
+// CarPlay and Android Auto through Carlinkit AutoKit adapters, including the
+// CPC200-CMAP (USB 1314:1520 / 1521). Older CMAP firmware uses a wired phone.
 //
 // The dongle has the Apple authentication chip and it talks to the phone itself (Bluetooth +
 // Wi-Fi). To the computer, over USB, it only sends the H.264 video, the audio and the status, and
@@ -107,7 +108,7 @@ signals:
 private:
     // ── thread USB ──
     void usbLoop();
-    libusb_device_handle *openDongle();
+    libusb_device_handle *openDongle(QString *error);
     void runSession(libusb_device_handle *h, unsigned char epIn, unsigned char epOut);
     void initDongle();
 
@@ -169,10 +170,10 @@ private:
     QByteArray m_rx;
     std::atomic<bool> m_sessionUp{false};
     bool m_videoFlag = false;
+    bool m_receivedVideo = false;
     bool m_greeted = false;
     int m_reqW = 1280, m_reqH = 720;
     quint32 m_phoneType = 0;
-    qint64 m_lastKeyframeMs = 0;
 
     CarVideoDecoder m_decoder;
     QHash<int, CarAudioOut *> m_audio;     // per audio type; they live in the main thread

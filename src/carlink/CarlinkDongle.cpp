@@ -228,6 +228,7 @@ void CarlinkDongle::setState(const QString &state, const QString &detail)
         if (m_state == state && m_detail == detail) return;
         m_state = state;
         m_detail = detail;
+        qInfo().noquote() << "[Carlink]" << state << detail;
         emit stateChanged();
     }, Qt::QueuedConnection);
 }
@@ -249,22 +250,25 @@ void CarlinkDongle::usbLoop()
         setState(QStringLiteral("error"), QCoreApplication::translate("Msg", "USB not available"));
         return;
     }
-    bool reportedPerm = false;
     while (!m_stop) {
         if (!m_wantEnabled) {
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
             continue;
         }
         m_dropSession = false;
-        libusb_device_handle *h = openDongle();
+        QString openError;
+        libusb_device_handle *h = openDongle(&openError);
         if (!h) {
-            if (!reportedPerm) setState(QStringLiteral("searching"));
+            // Keep an actionable USB error visible until access is restored or
+            // the adapter is unplugged. Do not overwrite it with "searching".
+            setState(openError.isEmpty() ? QStringLiteral("searching") : QStringLiteral("error"), openError);
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             continue;
         }
         unsigned char epIn = 0, epOut = 0;
         libusb_config_descriptor *cfg = nullptr;
-        if (libusb_get_active_config_descriptor(libusb_get_device(h), &cfg) == 0) {
+        if (libusb_get_active_config_descriptor(libusb_get_device(h), &cfg) == 0
+            && cfg->bNumInterfaces > 0 && cfg->interface[0].num_altsetting > 0) {
             const libusb_interface_descriptor &alt = cfg->interface[0].altsetting[0];
             for (int e = 0; e < alt.bNumEndpoints; ++e) {
                 const auto &ep = alt.endpoint[e];
@@ -272,13 +276,18 @@ void CarlinkDongle::usbLoop()
                 if (ep.bEndpointAddress & LIBUSB_ENDPOINT_IN) epIn = ep.bEndpointAddress;
                 else epOut = ep.bEndpointAddress;
             }
-            libusb_free_config_descriptor(cfg);
         }
-        if (epIn && epOut && libusb_claim_interface(h, 0) == 0) {
+        if (cfg) libusb_free_config_descriptor(cfg);
+        const int claim = epIn && epOut ? libusb_claim_interface(h, 0) : LIBUSB_ERROR_NOT_FOUND;
+        if (claim == 0) {
+            qInfo() << "[Carlink] bulk endpoints" << Qt::hex << epIn << epOut;
             runSession(h, epIn, epOut);
             libusb_release_interface(h, 0);
         } else {
-            setState(QStringLiteral("error"), QCoreApplication::translate("Msg", "The dongle is not responding"));
+            qWarning() << "[Carlink] claiming USB interface:" << libusb_error_name(claim);
+            setState(QStringLiteral("error"), claim == LIBUSB_ERROR_BUSY
+                ? QCoreApplication::translate("Msg", "The dongle is in use by another application. Close it and reconnect.")
+                : QCoreApplication::translate("Msg", "Cannot claim the dongle USB interface (%1)").arg(QString::fromLatin1(libusb_error_name(claim))));
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
         libusb_close(h);
@@ -287,18 +296,35 @@ void CarlinkDongle::usbLoop()
     m_usb = nullptr;
 }
 
-libusb_device_handle *CarlinkDongle::openDongle()
+libusb_device_handle *CarlinkDongle::openDongle(QString *error)
 {
+    error->clear();
     libusb_device **list = nullptr;
     const ssize_t n = libusb_get_device_list(m_usb, &list);
+    if (n < 0) {
+        *error = QCoreApplication::translate("Msg", "Cannot list USB devices (%1)")
+            .arg(QString::fromLatin1(libusb_error_name(int(n))));
+        return nullptr;
+    }
     libusb_device_handle *h = nullptr;
     for (ssize_t k = 0; k < n && !h; ++k) {
         libusb_device_descriptor d{};
         if (libusb_get_device_descriptor(list[k], &d) != 0) continue;
         if (d.idVendor != 0x1314 || (d.idProduct != 0x1520 && d.idProduct != 0x1521)) continue;
-        if (libusb_open(list[k], &h) != 0) {
-            setState(QStringLiteral("error"), QCoreApplication::translate("Msg", "Missing USB permissions for the dongle"));
+        const int result = libusb_open(list[k], &h);
+        if (result != 0) {
+            if (result == LIBUSB_ERROR_ACCESS) {
+                *error = QCoreApplication::translate("Msg", "USB access denied. Install packaging/51-volta-carlinkit.rules, reload udev rules, then unplug and reconnect the dongle.");
+            } else if (result != LIBUSB_ERROR_NO_DEVICE) {
+                *error = QCoreApplication::translate("Msg", "Cannot open the Carlinkit dongle (%1)")
+                    .arg(QString::fromLatin1(libusb_error_name(result)));
+            }
             h = nullptr;
+        } else {
+            error->clear();
+            qInfo().noquote() << QStringLiteral("[Carlink] USB %1:%2 on bus %3 device %4")
+                .arg(d.idVendor, 4, 16, QLatin1Char('0')).arg(d.idProduct, 4, 16, QLatin1Char('0'))
+                .arg(libusb_get_bus_number(list[k])).arg(libusb_get_device_address(list[k]));
         }
     }
     libusb_free_device_list(list, 1);
@@ -315,6 +341,7 @@ void CarlinkDongle::runSession(libusb_device_handle *h, unsigned char epIn, unsi
     }
     m_rx.clear();
     m_videoFlag = false;
+    m_receivedVideo = false;
     m_greeted = false;
     m_phoneType = 0;
     m_decoder.reset();
@@ -337,15 +364,23 @@ void CarlinkDongle::runSession(libusb_device_handle *h, unsigned char epIn, unsi
     auto now = [] { return std::chrono::steady_clock::now(); };
     auto lastBeat = now();
     auto lastKey = now();
+    const auto started = now();
     QByteArray buf(0x100000, 0);
     while (!m_stop && !m_dropSession && m_wantEnabled) {
+        if (!m_greeted && now() - started > std::chrono::seconds(15)) {
+            qWarning() << "[Carlink] no protocol reply after 15 seconds; reopening USB";
+            break;
+        }
         if (now() - lastBeat > std::chrono::seconds(2)) {
             lastBeat = now();
             if (!sendPacket(HEARTBEAT)) break;
         }
-        // until the first frame arrives a full frame is requested now and then
-        if (m_phoneType && !m_videoFlag && now() - lastKey > std::chrono::seconds(2)) {
+        // A still-connected phone can resume video without another PLUGGED
+        // notification. Recover both that startup case and later decode errors.
+        if ((m_phoneType || m_receivedVideo) && (!m_videoFlag || m_decoder.needsKeyframe())
+            && now() - lastKey > std::chrono::seconds(2)) {
             lastKey = now();
+            qInfo() << "[Carlink] requesting video keyframe / parameter sets";
             sendCommand(CMD_KEYFRAME);
         }
         int n = 0;
@@ -391,7 +426,10 @@ bool CarlinkDongle::sendPacket(quint32 type, const QByteArray &payload)
             int n = 0;
             const int r = libusb_bulk_transfer(m_dev, m_epOut, (unsigned char *)d.constData() + done,
                                                int(d.size()) - done, &n, 1000);
-            if (r != 0 && !(r == LIBUSB_ERROR_TIMEOUT && n > 0)) return false;
+            if ((r != 0 && !(r == LIBUSB_ERROR_TIMEOUT && n > 0)) || n <= 0) {
+                qWarning() << "[Carlink] USB write failed:" << libusb_error_name(r) << "bytes" << n;
+                return false;
+            }
             done += n;
         }
         return true;
@@ -472,6 +510,9 @@ void CarlinkDongle::handlePacket(quint32 type, const QByteArray &data)
         if (!m_phoneType && type != PLUGGED) setState(QStringLiteral("waiting"));
     }
     switch (type) {
+    case OPEN:
+        qInfo() << "[Carlink] adapter confirmed display configuration";
+        break;
     case PLUGGED: {
         m_phoneType = data.size() >= 4 ? qFromLittleEndian<quint32>(data.constData()) : 0;
         const QString kind = m_phoneType == 3 ? QStringLiteral("CarPlay")
@@ -487,6 +528,7 @@ void CarlinkDongle::handlePacket(quint32 type, const QByteArray &data)
         qInfo() << "[Carlink] phone disconnected from the dongle";
         m_phoneType = 0;
         m_videoFlag = false;
+        m_receivedVideo = false;
         m_decoder.reset();
         setVideoActive(false);
         QMetaObject::invokeMethod(this, [this] {
@@ -501,6 +543,7 @@ void CarlinkDongle::handlePacket(quint32 type, const QByteArray &data)
         break;
     case VIDEO: {
         if (data.size() <= 20) break;
+        m_receivedVideo = true;
         const quint32 w = qFromLittleEndian<quint32>(data.constData());
         const quint32 hgt = qFromLittleEndian<quint32>(data.constData() + 4);
         m_decoder.decode(data.mid(20));
@@ -527,7 +570,7 @@ void CarlinkDongle::handlePacket(quint32 type, const QByteArray &data)
         break;
     }
     case SW_VERSION:
-        qInfo() << "[Carlink] versione dongle:" << QString::fromUtf8(data).trimmed();
+        qInfo() << "[Carlink] firmware:" << QString::fromUtf8(data.split('\0').value(0)).trimmed();
         // the dongle is ready: if there is no phone, wait
         if (!m_phoneType) setState(QStringLiteral("waiting"));
         break;

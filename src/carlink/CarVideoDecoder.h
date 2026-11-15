@@ -21,6 +21,7 @@ public:
     void decode(const QByteArray &h264);
     void reset();
     int frames() const { return m_frames; }
+    bool needsKeyframe() const { return m_waitingForKeyframe; }
 
 private:
     bool open();
@@ -33,4 +34,6 @@ private:
     QMutex m_sinkLock;
     QPointer<QVideoSink> m_sink;
     int m_frames = 0;
+    bool m_waitingForKeyframe = true;
+    QByteArray m_sps, m_pps;
 };

@@ -1,0 +1,4 @@
+# Carlinkit CPC200-CMAP / AutoKit adapters. Grant access only to the active
+# local desktop user; match both runtime product IDs used by these adapters.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1314", ATTR{idProduct}=="1520", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1314", ATTR{idProduct}=="1521", TAG+="uaccess"
