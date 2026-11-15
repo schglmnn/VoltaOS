@@ -130,7 +130,7 @@ Item {
             z: 10
             readonly property real u: (Window.window && Window.window.uPx) ? Window.window.uPx : 1.12
             readonly property bool fullMode: carPanel.panelProgress > 0.5   // dl67: posizioni diverse in fullscreen
-            readonly property bool hasCar: (car3DView.userCarActive && !car3DView.replacing)
+            readonly property bool hasCar: ((car3DView.userCarActive || car3DView.smartOn) && !car3DView.replacing)
             readonly property bool shown: callouts.hasCar && !car3DView.fsdMode && ((carPanel.panelProgress < 0.15 && Math.abs(car3DView.azimuthDeg - 7.9) < 12)
                                                                  || (carPanel.panelProgress > 0.85 && Math.abs(car3DView.azimuthDeg) < 12)) || (car3DView.moveButtons && callouts.hasCar)
             visible: opacity > 0.01

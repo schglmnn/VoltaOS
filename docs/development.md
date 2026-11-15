@@ -65,6 +65,12 @@ a single **queue** and a single **search**. To add a source you need: a service 
 | `VOLTA_CARLINK_AUTO=1` | enables the CarPlay / Android Auto dongle at startup |
 | `VOLTA_GPS_SIMULATE=lat,lon` | stationary simulated GPS fix for this process; bypasses receiver probing, reports zero speed and satellites, and labels the source as simulated. Unset and restart for real GPS. Does not change the phone's location in CarPlay. |
 
+For a saved Smart that accidentally uses `assets/car3d/car_body_debug.glb`, its
+`~/.config/volta/car/auto_<id>.meta.json` can select `"renderer": "builtin-smart"`.
+This uses the complete bundled body, normal materials and four wheel models while
+keeping the imported GLB and part mappings intact. Other saved cars continue to use
+their GLB. Back up the car directory before changing the metadata, then restart.
+
 Quick test after QML changes, without a screen: `QT_QPA_PLATFORM=offscreen ./build/Release/VoltaOS` and
 look in the log for `TypeError`, `ReferenceError`, `Non-existent`, `failed to load` and the `FIRST FRAME` line.
 Graphic effects (masks, `MultiEffect`) are not visible offscreen: for screenshots use a real

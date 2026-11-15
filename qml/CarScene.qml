@@ -377,9 +377,14 @@ Item {
     Behavior on _hood { NumberAnimation { duration: 750; easing.type: Easing.InOutCubic } }
     function _has(v) { return v !== undefined && v !== null && v !== "" && (typeof v === "string" || v.length === undefined || v.length > 0) }      // a part can be a mesh or a list of meshes
     readonly property bool hasHood: root.userCarActive && !!root._carInfo.parts && root._has(root._carInfo.parts.hood)
-    readonly property bool hasTrunk: root.userCarActive && !!root._carInfo.parts && root._has(root._carInfo.parts.trunk)
-    property bool useGlbCar: true
-    readonly property bool smartOn: false       // the old car (Smart) is no longer shown: only the user's car is there
+    readonly property bool hasTrunk: root.smartOn || (root.userCarActive && !!root._carInfo.parts && root._has(root._carInfo.parts.trunk))
+    // Per-car opt-in to the complete bundled Smart (body + four wheels).
+    // Imported GLBs keep their existing rendering and part configuration.
+    property bool useGlbCar: !root.smartOn
+    readonly property bool smartOn: {
+        var revision = CarModels.revision
+        return !root.replacing && CarModels.currentMeta().renderer === "builtin-smart"
+    }
     readonly property var _carInfo: { var r = CarModels.revision; return CarModels.carFile !== "" ? CarModels.currentParts() : ({}) }
     readonly property bool userCarActive: root.useGlbCar && _carInfo.ok === true
     readonly property var _fin: root._finishParams(root.carFinish)
@@ -1251,7 +1256,7 @@ Item {
                 // Exact dimensions from the model: car 1.757 × 2.694 + fade margin 1.1 per side
                 // → plane 3.957 × 4.894 units
                 scale: Qt.vector3d(0.039572 * root.layout.shWid, 0.048939 * 1.28 * root.layout.shLen, 1)
-                visible: root.userCarActive && !root.replacing
+                visible: (root.userCarActive || root.smartOn) && !root.replacing
                 castsShadows: false
                 receivesShadows: false
                 depthBias: -10
@@ -1473,7 +1478,7 @@ Item {
     // ═══ NO CAR: blue "Load 3D car" button in place of the car ═══
     property string _carErr: ""
     Column {
-        visible: (!root.userCarActive || root.replacing) && !root.fsdMode
+        visible: ((!root.userCarActive && !root.smartOn) || root.replacing) && !root.fsdMode
         anchors.centerIn: parent
         z: 60
         spacing: 12
