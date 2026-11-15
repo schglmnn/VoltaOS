@@ -211,37 +211,61 @@ static void startPy(const QString &name, QObject *parent)
     proc->start();
 }
 
-// spotifyd (Spotify Connect): supervised like the Python services.
+// Local Spotify Connect receiver: spotifyd, or Spotify's official Soloist.
 static void startSpotifyd(QObject *parent)
 {
+    const bool soloist = qEnvironmentVariable("SPOTIFY_RECEIVER") == QLatin1String("soloist");
+    const QString label = soloist ? QStringLiteral("soloist") : QStringLiteral("spotifyd");
+    const QString apiKey = soloist ? qEnvironmentVariable("SPOTIFY_SOLOIST_API_KEY") : QString();
+    QString program = QStringLiteral("spotifyd");
+    QStringList arguments;
+    if (soloist) {
+        program = qEnvironmentVariable("VOLTA_SOLOIST_BIN", projectDir() + QStringLiteral("/.runtime/soloist/soloist"));
+        if (apiKey.isEmpty() || !QFileInfo(program).isExecutable()) {
+            qWarning() << "[soloist] Set SPOTIFY_SOLOIST_API_KEY and install the official binary in .runtime/soloist/";
+            return;
+        }
+        arguments = {QStringLiteral("--device-name=Volta OS (soloist)"), QStringLiteral("--api-key"), apiKey,
+                     QStringLiteral("--data-dir"), QDir::homePath() + QStringLiteral("/.local/share/volta_soloist"),
+                     QStringLiteral("--cache-dir"), QDir::homePath() + QStringLiteral("/.cache/volta_soloist"),
+                     QStringLiteral("--cache-size=256"), QStringLiteral("--initial-volume=100")};
+    } else {
+        arguments = {QStringLiteral("--no-daemon"), QStringLiteral("--volume-normalisation=true"),
+                     QStringLiteral("--normalisation-pregain=3.5"), QStringLiteral("--initial-volume=100"),
+                     QStringLiteral("--backend=pulseaudio"), QStringLiteral("--device-name=Volta OS (spotifyd)")};
+    }
     auto *p = new QProcess(parent);
     p->setProcessChannelMode(QProcess::MergedChannels);
-    QObject::connect(p, &QProcess::readyRead, [p]() {
+    QObject::connect(p, &QProcess::readyRead, [p, label, apiKey]() {
         QByteArray out = p->readAll().trimmed();
-        if (!out.isEmpty())
-            qDebug().noquote() << "[spotifyd]" << out;
+        if (!apiKey.isEmpty()) out.replace(apiKey.toUtf8(), "[redacted]");
+        if (!out.isEmpty()) qDebug().noquote() << "[" + label + "]" << out;
     });
-    QObject::connect(p, &QProcess::started, []() { qDebug() << "[spotifyd] Avviato (Spotify Connect)"; });
-    QObject::connect(p, &QProcess::errorOccurred, [](QProcess::ProcessError e) {
+    QObject::connect(p, &QProcess::started, [label]() {
+        qInfo().noquote() << "[" + label + "] Spotify Connect receiver started";
+    });
+    QObject::connect(p, &QProcess::errorOccurred, [label](QProcess::ProcessError e) {
         if (e == QProcess::FailedToStart)
-            qWarning() << "[spotifyd] Not found — install spotifyd for Spotify playback";
+            qWarning().noquote() << "[" + label + "] Could not start the local Spotify receiver";
     });
     QObject::connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                     [p, parent](int exitCode, QProcess::ExitStatus) {
+                     [p, parent, soloist, label](int exitCode, QProcess::ExitStatus) {
                          p->deleteLater();
                          if (appIsClosing()) return;
-                         const int delay = svcNextDelayMs(QStringLiteral("spotifyd"));
-                         qWarning().noquote() << "[spotifyd] terminato (codice" << exitCode
-                                               << ") — restarting in" << delay / 1000.0 << "s";
+                         if (soloist && exitCode == 10) {
+                             qWarning() << "[soloist] Build expired; download an updated official build";
+                             return;
+                         }
+                         const int delay = svcNextDelayMs(label);
+                         qWarning().noquote() << "[" + label + "] exited" << exitCode
+                                             << "— restarting in" << delay / 1000.0 << "s";
                          QTimer::singleShot(delay, parent, [parent]() {
                              if (!appIsClosing()) startSpotifyd(parent);
                          });
                      });
-    svcMarkStarted(QStringLiteral("spotifyd"));
-    // Same level as the other sources, MEASURED (same song): YT Music -14.1 LUFS; Spotify with pregain 0 -17.6, with +3.5 -14.5.
-    // Initial volume at 100% (by default it is 90% on a logarithmic curve, about -6 dB).
-    p->start("spotifyd", {"--no-daemon", "--volume-normalisation=true", "--normalisation-pregain=3.5",
-                          "--initial-volume=100"});
+    svcMarkStarted(label);
+    // Never log arguments: Soloist's documented CLI receives its key there.
+    p->start(program, arguments);
 }
 
 // ── UI stutter probe (active only with VOLTA_STALL=1) ─────────────────────────

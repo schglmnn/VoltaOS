@@ -290,8 +290,9 @@ Rectangle {
         var url = root.backendUrl + path + sep + "_t=" + Date.now() + "_" + rnd
         xhr.open("GET", url)
         xhr.onreadystatechange = function() {
-            if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-                try { cb(JSON.parse(xhr.responseText)) } catch(e) {}
+            if (xhr.readyState === XMLHttpRequest.DONE) {
+                try { cb(JSON.parse(xhr.responseText)) }
+                catch(e) { cb({error: qsTr("Music service unreachable")}) }
             }
         }
         xhr.send()

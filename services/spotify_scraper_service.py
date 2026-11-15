@@ -34,13 +34,19 @@ SCOPE = ("user-library-read user-library-modify user-top-read playlist-read-priv
 sp_oauth = None
 sp_official = None
 
+class NonInteractiveSpotifyOAuth(SpotifyOAuth):
+    def get_auth_response(self, *args, **kwargs):
+        # HTTP workers must never prompt on stdin or wait for a pasted URL.
+        # Interactive authorization is handled by /login and /callback.
+        raise RuntimeError("login_required")
+
 # Spotify login token: outside the project (it is a secret). A single path,
 # used both by spotipy and by is_logged_in().
 TOKEN_PATH = os.path.expanduser("~/.config/volta/spotify_token.cache")
 os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
 
 if SPOTIPY_CLIENT_ID and "INSERISCI" not in SPOTIPY_CLIENT_ID:
-    sp_oauth = SpotifyOAuth(
+    sp_oauth = NonInteractiveSpotifyOAuth(
         client_id=SPOTIPY_CLIENT_ID,
         client_secret=SPOTIPY_CLIENT_SECRET,
         redirect_uri=SPOTIPY_REDIRECT_URI,
@@ -48,7 +54,7 @@ if SPOTIPY_CLIENT_ID and "INSERISCI" not in SPOTIPY_CLIENT_ID:
         open_browser=False,
         cache_path=TOKEN_PATH
     )
-    sp_official = spotipy.Spotify(auth_manager=sp_oauth)
+    sp_official = spotipy.Spotify(auth_manager=sp_oauth, requests_timeout=10, retries=0)
 
 def is_logged_in():
     """True if a saved session exists. It does not attempt the token refresh
@@ -59,7 +65,8 @@ def is_logged_in():
         import json as _j
         with open(TOKEN_PATH) as f:
             info = _j.load(f)
-        return bool(info.get("refresh_token") or info.get("access_token"))
+        return (bool(info.get("refresh_token") or info.get("access_token"))
+                and set(SCOPE.split()).issubset((info.get("scope") or "").split()))
     except Exception:
         return False
 
@@ -118,34 +125,28 @@ def _spotify_call(fn, *args, **kwargs):
         raise
 
 # ── SPOTIFY CONNECT / spotifyd ──
-SPOTIFYD_NAME = os.environ.get("SPOTIFYD_DEVICE", "")
+SPOTIFYD_NAME = os.environ.get("SPOTIFYD_DEVICE", "") or (
+    "Volta OS (soloist)" if os.environ.get("SPOTIFY_RECEIVER") == "soloist" else "")
 
 def _uri(track_id):
     tid = str(track_id or "")
     return tid if tid.startswith("spotify:") else ("spotify:track:" + tid)
 
 def _connect_device_id():
-    """Finds the Spotify Connect device (spotifyd) to play on."""
+    """Only target this computer's receiver, never an unrelated active phone."""
     if not (is_logged_in() and sp_official):
         return None
-    try:
-        devs = (sp_official.devices() or {}).get("devices", [])
-        if not devs:
-            return None
-        if SPOTIFYD_NAME:
-            for d in devs:
-                if SPOTIFYD_NAME.lower() in (d.get("name","") or "").lower():
-                    return d["id"]
-        for d in devs:
-            if "spotifyd" in (d.get("name","") or "").lower():
-                return d["id"]
-        for d in devs:
-            if d.get("is_active"):
-                return d["id"]
-        return devs[0]["id"]
-    except Exception as e:
-        print("Connect devices err:", e)
-        return None
+    devices = (_spotify_call(sp_official.devices) or {}).get("devices", [])
+    for device in devices:
+        name = (device.get("name") or "").lower()
+        if (SPOTIFYD_NAME and SPOTIFYD_NAME.lower() in name) or (not SPOTIFYD_NAME and name in ("volta os (spotifyd)", "volta os (soloist)")):
+            return device["id"]
+    if not SPOTIFYD_NAME:
+        for device in devices:
+            if "spotifyd" in (device.get("name") or "").lower():
+                return device["id"]
+    return None
+
 
 # ── ENDPOINT DI AUTENTICAZIONE ──
 @app.route("/auth/status")
@@ -264,36 +265,93 @@ def _q_current():
 # spotifyd starts at 90% on a logarithmic curve (about -6 dB): Spotify came out lower than YT Music.
 # At the first playback on a device it is brought to 100%; the volume is then adjusted with the system volume.
 _vol_done = set()
-def _ensure_full_volume():
+def _ensure_full_volume(device_id=None):
+    try:
+        dev = device_id or _connect_device_id()
+        if not dev or dev in _vol_done: return
+        _spotify_call(sp_official.volume, 100, device_id=dev)
+        _vol_done.add(dev)
+    except Exception as e:
+        print("[spotify] volume adjustment failed:", type(e).__name__, flush=True)
+
+
+class PlaybackError(RuntimeError):
+    def __init__(self, code, message, status=409):
+        super().__init__(message)
+        self.code, self.status = code, status
+
+
+def _start_local_playback(uris=None, position_ms=0):
+    if not (is_logged_in() and sp_official):
+        raise PlaybackError("login_required", "Sign in to Spotify in Volta OS first.", 401)
+    if uris is not None and not uris:
+        raise PlaybackError("no_tracks", "No playable tracks.", 400)
     try:
         dev = _connect_device_id()
-        if not dev or dev in _vol_done: return
-        _vol_done.add(dev)
-        sp_official.volume(100, device_id=dev)
-    except Exception as e:
-        print("[spotify] volume 100% err:", repr(e), flush=True)
+        if not dev:
+            raise PlaybackError("no_local_device", "Local Spotify receiver not connected. Select Volta OS (soloist) or Volta OS (spotifyd) in the official Spotify app device picker.")
+        args = {"device_id": dev}
+        if uris is not None: args["uris"] = uris
+        if position_ms: args["position_ms"] = position_ms
+        try:
+            _spotify_call(sp_official.start_playback, **args)
+        except Exception as error:
+            # Some Connect receivers reject a URI-only start while idle because
+            # they have no playback context. Bootstrap the same track through
+            # its album, preserving the requested offset and queued tracks.
+            if not (uris and getattr(error, "http_status", None) == 403
+                    and "restriction violated" in str(getattr(error, "msg", error)).lower()):
+                raise
+            track = _spotify_call(sp_official.track, uris[0])
+            album_uri = (track.get("album") or {}).get("uri")
+            if not album_uri:
+                raise PlaybackError("missing_context", "Spotify did not provide a playable album context.")
+            context_args = {"device_id": dev, "context_uri": album_uri, "offset": {"uri": uris[0]}}
+            if position_ms: context_args["position_ms"] = position_ms
+            _spotify_call(sp_official.start_playback, **context_args)
+            for uri in uris[1:]:
+                try:
+                    _spotify_call(sp_official.add_to_queue, uri, device_id=dev)
+                except Exception:
+                    print("[spotify] could not enqueue all requested tracks", flush=True)
+                    break
+        _ensure_full_volume(dev)
+        _status_cache.update(t=0.0, data=None)
+    except PlaybackError:
+        raise
+    except Exception as error:
+        status = getattr(error, "http_status", None)
+        if status == 403:
+            message = "Spotify rejected playback. Check Premium and receiver authorization."
+        elif status == 429 or str(error) == "rate_limited":
+            message = "Spotify rate limit reached. Please wait before retrying."
+        else:
+            message = "Spotify could not start playback on the local receiver. Reconnect the receiver and try again."
+        raise PlaybackError("spotify_rejected", message, 502) from error
+
+
+def _playback_error_response(error):
+    player_state["is_playing"] = False
+    _status_cache.update(t=0.0, data=None)
+    print("[spotify] playback failed:", error.code, flush=True)
+    return jsonify({"status": "error", "code": error.code, "error": str(error)}), error.status
+
 
 def _play_at(idx):
-    """Sets the track at position idx of the queue and plays it."""
-    global player_state
+    """Advance the local queue only after Spotify accepts playback."""
     q = player_state["queue"]
     if not q or not (0 <= idx < len(q)): return False
-    player_state["queue_pos"] = idx
-    player_state["track"] = q[idx]
-    player_state["is_playing"] = True
-    player_state["progress_ms"] = 0
-    player_state["last_update"] = time.time()
+    uris = [_uri(t.get("id")) for t in q[idx:idx+50] if t.get("id")]
+    try:
+        _start_local_playback(uris)
+    except PlaybackError as error:
+        player_state["is_playing"] = False
+        print("[spotify] playback failed:", error.code, flush=True)
+        return False
+    player_state.update(queue_pos=idx, track=q[idx], is_playing=True, progress_ms=0, last_update=time.time())
     _push_recent(q[idx])
-    
-    if is_logged_in() and sp_official:
-        try:
-            uris = [_uri(t.get("id")) for t in q[idx:idx+50] if t.get("id")]
-            if uris:
-                sp_official.start_playback(device_id=_connect_device_id(), uris=uris)
-                _ensure_full_volume()
-        except Exception as e:
-            print("_play_at Connect err:", e)
     return True
+
 
 def _advance(auto=False):
     """Moves to the next track (or random). auto=True: natural end of track,
@@ -546,83 +604,59 @@ def player_status():
 
 @app.route("/play/<track_id>")
 def play_track(track_id):
-    global player_state
-    t = {
-        "id": track_id,
-        "title": request.args.get("title", ""),
-        "subtitle": request.args.get("subtitle", ""),
-        "cover": request.args.get("cover", "")
-    }
-    player_state["track"] = t
-    player_state["queue"] = [t]
-    player_state["queue_pos"] = 0
-    _push_recent(t)
-
+    t = {"id": track_id, "title": request.args.get("title", ""),
+         "subtitle": request.args.get("subtitle", ""), "cover": request.args.get("cover", "")}
     try: start_ms = max(0, int(float(request.args.get("start_ms", 0) or 0)))
-    except Exception: start_ms = 0
+    except (ValueError, OverflowError): start_ms = 0
     if start_ms < 3000: start_ms = 0
-
-    if is_logged_in() and sp_official:
-        try:
-            if start_ms: sp_official.start_playback(device_id=_connect_device_id(), uris=[_uri(track_id)], position_ms=start_ms)
-            else: sp_official.start_playback(device_id=_connect_device_id(), uris=[_uri(track_id)])
-            _ensure_full_volume()
-        except Exception as e:
-            print("start_playback err:", e)
-
-    # Radio: similar tracks are queued on Spotify as soon as they are ready
+    try:
+        _start_local_playback([_uri(track_id)], start_ms)
+    except PlaybackError as error:
+        return _playback_error_response(error)
+    player_state.update(track=t, queue=[t], queue_pos=0, is_playing=True,
+                        progress_ms=start_ms, last_update=time.time())
+    _push_recent(t)
     _radio_enqueue_bg(track_id, t.get("subtitle", ""))
+    return jsonify({"status": "playing", "track": t})
 
-    player_state["is_playing"] = True
-    player_state["progress_ms"] = start_ms
-    player_state["last_update"] = time.time()
-    return jsonify({"status": "playing"})
 
 @app.route("/play_context", methods=["POST"])
 def play_context():
     data = request.get_json(force=True, silent=True) or {}
-    global player_state
-    tracks = data.get("tracks", [])
-    index = data.get("index", 0)
-    if tracks and len(tracks) > index:
-        player_state["queue"] = tracks
-        player_state["queue_pos"] = index
-        player_state["track"] = tracks[index]
-        
-        _push_recent(tracks[index])
-        
-        if is_logged_in() and sp_official:
-            try:
-                uris = [_uri(t.get("id")) for t in player_state["queue"][index:index+50] if t.get("id")]
-                if uris:
-                    sp_official.start_playback(device_id=_connect_device_id(), uris=uris)
-                    _ensure_full_volume()
-            except Exception as e:
-                print("play_context Connect err:", e)
+    tracks, index = data.get("tracks", []), data.get("index", 0)
+    if not isinstance(tracks, list) or not isinstance(index, int) or not 0 <= index < len(tracks):
+        return jsonify({"status": "error", "error": "No track"}), 400
+    uris = [_uri(t.get("id")) for t in tracks[index:index+50] if isinstance(t, dict) and t.get("id")]
+    try:
+        _start_local_playback(uris)
+    except PlaybackError as error:
+        return _playback_error_response(error)
+    player_state.update(queue=tracks, queue_pos=index, track=tracks[index],
+                        is_playing=True, progress_ms=0, last_update=time.time())
+    _push_recent(tracks[index])
+    if index >= len(tracks) - 1:
+        _radio_enqueue_bg(tracks[index].get("id"), tracks[index].get("subtitle", ""))
+    return jsonify({"status": "playing", "track": tracks[index]})
 
-        # Single track (or last of the list): creates the radio and queues it
-        if index >= len(tracks) - 1:
-            _radio_enqueue_bg(tracks[index].get("id"), tracks[index].get("subtitle", ""))
-
-        player_state["is_playing"] = True
-        player_state["progress_ms"] = 0
-        player_state["last_update"] = time.time()
-        return jsonify({"status": "playing"})
-    return jsonify({"status": "error", "error": "No track"})
 
 @app.route("/player/pause")
 def pause_player():
-    global player_state
-    update_player()
-    play = (request.args.get("state", "1") == "0")
-    player_state["is_playing"] = play
-    player_state["last_update"] = time.time()
-    if is_logged_in() and sp_official:
-        try:
-            if play: sp_official.start_playback(device_id=_connect_device_id())
-            else:    sp_official.pause_playback(device_id=_connect_device_id())
-        except Exception: pass
-    return jsonify({"paused": not player_state["is_playing"]})
+    play = request.args.get("state", "1") == "0"
+    try:
+        if play:
+            _start_local_playback()
+        elif is_logged_in() and sp_official:
+            dev = _connect_device_id()
+            if dev:
+                _spotify_call(sp_official.pause_playback, device_id=dev)
+    except PlaybackError as error:
+        return _playback_error_response(error)
+    except Exception:
+        return _playback_error_response(PlaybackError("spotify_rejected", "Spotify could not pause the local receiver."))
+    player_state.update(is_playing=play, last_update=time.time())
+    _status_cache.update(t=0.0, data=None)
+    return jsonify({"paused": not play})
+
 
 @app.route("/player/next")
 def player_next():
