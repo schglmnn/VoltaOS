@@ -6,6 +6,7 @@ __pycache__/
 *.bak*
 *.orig
 venv/
+.runtime/
 data/
 sc_downloader/
 
